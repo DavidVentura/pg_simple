@@ -246,14 +246,19 @@ class PgSimple(object):
             return ' RETURNING %s' % returning
         return ''
 
-    def _select(self, table=None, fields=(), where=None, order=None, limit=None, offset=None):
-        """Run a select query"""
+    def _select_sql(self, table, fields, w_clause, order, limit, offset):
+        assert len(fields) > 0
         fields = ",".join(fields)
-        w_clause, w_values = self._where(where)
         order = self._order(order)
         limit = self._limit(limit)
         offset = self._offset(offset)
         sql = f'SELECT {fields} FROM {table} {w_clause} {order} {limit} {offset}'
+        return sql
+
+    def _select(self, table, fields=(), where=None, order=None, limit=None, offset=None):
+        """Run a select query"""
+        w_clause, w_values = self._where(where)
+        sql = _select_sql(table, fields, w_clause, order, limit, offset)
         return self.execute(sql, w_values)
 
     def _join_sql(self, tables, fields, join_fields, w_clause, order, limit, offset):

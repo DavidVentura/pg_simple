@@ -13,6 +13,53 @@ def db():
     pg_simple.PgSimple._connect = lambda x: 0
     return pg_simple.PgSimple(pool=None)
 
+@pytest.mark.parametrize("fields", [
+    ['f1'],
+    ['f1', 'f2', 'f3'],
+    ])
+@pytest.mark.parametrize("where", [
+    ('', []), 
+    ('condition = %s', ["77"]), 
+    ('condition = %s and condition2 = %s', ["77", "88"]),
+    ('condition = %s and condition2 like %s', ["77", "88"]),
+    ])
+@pytest.mark.parametrize("order", [
+    None,
+    ['f1', pg_simple.Order.DESC],
+    ['f1', pg_simple.Order.ASC],
+    ])
+@pytest.mark.parametrize("limit", [None, 999])
+@pytest.mark.parametrize("offset", [None, 999])
+def test_select(db, fields, where, order, limit, offset):
+    sql = db._select_sql('my_table', fields, where[0], order, limit, offset).lower().strip()
+
+    tokens = sqlparse.parse(sql)[0].flatten()
+    valid_tokens = [t for t in tokens if not t.ttype in INVALID_TOKENS]
+
+    assert valid_tokens.pop(0).value == 'select'
+    for f in fields:
+        assert valid_tokens.pop(0).value == f
+
+    assert valid_tokens.pop(0).value == 'my_table'
+
+    if where:
+        condition, values = where
+        for value in values:
+            assert valid_tokens.pop(0).ttype == sqlparse.tokens.Name # how do I test condition/condition2
+            assert valid_tokens.pop(0).ttype == sqlparse.tokens.Name.Placeholder # properly tokenized
+
+    if order:
+        assert valid_tokens.pop(0).value == order[0]
+        assert valid_tokens.pop(0).value.lower() == order[1].value.lower()
+
+    if limit:
+        assert int(valid_tokens.pop(0).value) == limit
+
+    if offset:
+        assert int(valid_tokens.pop(0).value) == offset
+
+    assert len(valid_tokens) == 0
+
 @pytest.mark.parametrize("data", [ {'key_1': 'value_1'}, {'key_1': 'value_1', 'key_2': 'value_2'}, ])
 def test_insert(db, data):
     sql = db._insert('my_table', data).lower().strip()
@@ -37,6 +84,7 @@ def test_insert(db, data):
     {'key_1': 'value_1', 'key_2': 'value_2'},
     ])
 @pytest.mark.parametrize("where", [
+    ('', []), 
     ('condition = %s', ["77"]), 
     ('condition = %s and condition2 = %s', ["77", "88"]),
     ('condition = %s and condition2 like %s', ["77", "88"]),
