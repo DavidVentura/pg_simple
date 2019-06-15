@@ -39,6 +39,7 @@ def test_insert(db, data):
 @pytest.mark.parametrize("where", [
     ('condition = %s', ["77"]), 
     ('condition = %s and condition2 = %s', ["77", "88"]),
+    ('condition = %s and condition2 like %s', ["77", "88"]),
     ])
 def test_update(db, data, where):
     sql = db._update('my_table', data=data, w_clause=where[0], returning=None)
@@ -65,7 +66,6 @@ def test_update(db, data, where):
     ])
 def test_join(db, tables, fields, join_fields):
     sql = db._join_sql(tables, fields, join_fields, '', None, None, None).lower().strip()
-    assert f'from {tables[0]} left join {tables[1]}' in sql
     tokens = sqlparse.parse(sql)[0].flatten()
     valid_tokens = [t for t in tokens if not t.ttype in INVALID_TOKENS]
 
