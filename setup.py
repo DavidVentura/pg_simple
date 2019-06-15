@@ -14,7 +14,7 @@ setup(
     name=pg_simple.__name__,
     version=pg_simple.VERSION,
     packages=find_packages(),
-    install_requires=['psycopg2'],
+    install_requires=['psycopg2-binary'],
     classifiers=['Topic :: Database',
                  'Programming Language :: Python',
                  'Programming Language :: Python :: 3',

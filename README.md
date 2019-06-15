@@ -180,7 +180,7 @@ db.drop('books')
 db.create('books',
           '''
 "id" SERIAL NOT NULL,
-"type" VARCHAR(20) NOT NULL,
+"genre" VARCHAR(20) NOT NULL,
 "name" VARCHAR(40) NOT NULL,
 "price" MONEY NOT NULL,
 "published" DATE NOT NULL,
@@ -224,7 +224,6 @@ with pg_simple.PgSimple(connection_pool) as db1:
                      'genre': 'non-fiction',
                      'modified': 'NOW()'},
                where=('published = %s', [datetime.date(2001, 1, 1)]))
-               
     db1.commit()
 ```
 
@@ -239,7 +238,7 @@ db.commit()
 
 ```python
 row = db.insert("books",
-                {"type": "fiction",
+                {"genre": "fiction",
                  "name": "Book with ID",
                  "price": 123.45,
                  "published": "1997-01-31"},
@@ -254,8 +253,8 @@ rows = db.update('books',
                  returning='modified')
 print(rows[0].modified)
 
-rows = db.delete('books', 
-                 where=('published >= %s', [datetime.date(2005, 1, 31)]), 
+rows = db.delete('books',
+                 where=('published >= %s', [datetime.date(2005, 1, 31)]),
                  returning='name')
 for r in rows:
     print(r.name)
@@ -264,10 +263,10 @@ for r in rows:
 ### Fetching a single record
 
 ```python
-book = db.fetchone('books', 
-                   fields=['name', 'published'], 
+book = db.fetchone('books',
+                   fields=['name', 'published'],
                    where=('published = %s', [datetime.date(2002, 2, 1)]))
-                   
+
 print(book.name + 'was published on ' + book[1])
 ```
 
@@ -277,8 +276,8 @@ print(book.name + 'was published on ' + book[1])
 books = db.fetchall('books',
                     fields=['name AS n', 'genre AS g'],
                     where=('published BETWEEN %s AND %s', [datetime.date(2005, 2, 1), datetime.date(2009, 2, 1)]),
-                    order=['published', 'DESC'], 
-                    limit=5, 
+                    order=['published', pg_simple.Order.DESC],
+                    limit=5,
                     offset=2)
 
 for book in books:

@@ -6,7 +6,12 @@ from collections import namedtuple
 import logging
 import os
 
+from enum import Enum
 from psycopg2.extras import DictCursor, NamedTupleCursor
+
+class Order(Enum):
+    DESC = 'DESC'
+    ASC = 'ASC'
 
 
 class PgSimple(object):
@@ -108,28 +113,41 @@ class PgSimple(object):
 
         return rows
 
-    def insert(self, table, data, returning=None):
+    def _insert(self, table, data, returning=None):
         """Insert a record"""
-        cols, vals = self._format_insert(data)
-        sql = 'INSERT INTO %s (%s) VALUES(%s)' % (table, cols, vals)
-        sql += self._returning(returning)
+        cols, val_placeholders = self._format_insert(data.keys())
+        returning = self._returning(returning)
+        sql = f'INSERT INTO {table} ({cols}) VALUES({val_placeholders}) {returning}'
+        return sql
+
+    def insert(self, table, data, returning=None):
+        sql = self._insert(table, data, returning)
         cur = self.execute(sql, list(data.values()))
         return cur.fetchone() if returning else cur.rowcount
 
-    def update(self, table, data, where=None, returning=None):
+    def _update(self, table, data, w_clause, returning):
         """Insert a record"""
-        query = self._format_update(data)
+        new_values = self._format_update(data.keys())
+        returning = self._returning(returning)
 
-        sql = 'UPDATE %s SET %s' % (table, query)
-        sql += self._where(where) + self._returning(returning)
-        cur = self.execute(sql, list(data.values()) + where[1] if where and len(where) > 1 else list(data.values()))
+        sql = f'UPDATE {table} SET {new_values} {w_clause} {returning}'
+        return sql
+
+    def update(self, table, data, where=None, returning=None):
+        assert len(data.keys()) > 0
+        w_clause, w_values = self._where(where)
+        sql = self._update(table, data, w_clause, returning)
+        cur = self.execute(sql, list(data.values()) + w_values)
+
         return cur.fetchall() if returning else cur.rowcount
 
     def delete(self, table, where=None, returning=None):
         """Delete rows based on a where condition"""
-        sql = 'DELETE FROM %s' % table
-        sql += self._where(where) + self._returning(returning)
-        cur = self.execute(sql, where[1] if where and len(where) > 1 else None)
+        w_clause, w_values = self._where(where)
+        sql = _delete(table, w_clause, returning)
+        returning = self._returning(returning)
+        sql = f'DELETE FROM {table} {w_clause} {returning}'
+        cur = self.execute(sql, w_values)
         return cur.fetchall() if returning else cur.rowcount
 
     def execute(self, sql, params=None):
@@ -187,28 +205,30 @@ class PgSimple(object):
         return self._connection.open
 
     def _format_insert(self, data):
-        """Format insert dict values into strings"""
-        cols = ",".join(data.keys())
-        vals = ",".join(["%s" for k in data])
+        """Format insert dict KEYS into strings"""
+        cols = ",".join(data)
+        vals = ",".join(["%s"]*len(data))
 
         return cols, vals
 
     def _format_update(self, data):
-        """Format update dict values into string"""
-        return "=%s,".join(data.keys()) + "=%s"
+        """Format update dict KEYS into string"""
+        return "=%s,".join(data) + "=%s"
 
     def _where(self, where=None):
-        if where and len(where) > 0:
-            return ' WHERE %s' % where[0]
-        return ''
+        if where:
+            assert len(where) == 2
+            return 'WHERE %s' % where[0], where[1]
+        return '', []
 
     def _order(self, order=None):
         sql = ''
         if order:
+            assert len(order) <= 2
             sql += ' ORDER BY %s' % order[0]
-
             if len(order) > 1:
-                sql += ' %s' % order[1]
+                assert type(order[1]) is Order
+                sql += ' %s' % order[1].value
         return sql
 
     def _limit(self, limit):
@@ -228,28 +248,44 @@ class PgSimple(object):
 
     def _select(self, table=None, fields=(), where=None, order=None, limit=None, offset=None):
         """Run a select query"""
-        sql = 'SELECT %s FROM %s' % (",".join(fields), table) \
-              + self._where(where) \
-              + self._order(order) \
-              + self._limit(limit) \
-              + self._offset(offset)
-        return self.execute(sql, where[1] if where and len(where) == 2 else None)
+        fields = ",".join(fields)
+        w_clause, w_values = self._where(where)
+        order = self._order(order)
+        limit = self._limit(limit)
+        offset = self._offset(offset)
+        sql = f'SELECT {fields} FROM {table} {w_clause} {order} {limit} {offset}'
+        return self.execute(sql, w_values)
 
-    def _join(self, tables=(), fields=(), join_fields=(), where=None, order=None, limit=None, offset=None):
-        """Run an inner left join query"""
+    def _join_sql(self, tables, fields, join_fields, w_clause, order, limit, offset):
+        assert len(tables) == len(fields) == len(join_fields)
+        assert len(tables) == 2
+        assert len(fields) == 2
+        assert len(join_fields) == 2
 
-        fields = [tables[0] + "." + f for f in fields[0]] + [tables[1] + "." + f for f in fields[1]]
+        f_table1, f_table2 = fields
+        f_table1 = [tables[0] + "." + f for f in f_table1]
+        f_table2 = [tables[1] + "." + f for f in f_table2]
+        fields =  ','.join(f_table1 + f_table2)
 
         sql = 'SELECT {0:s} FROM {1:s} LEFT JOIN {2:s} ON ({3:s} = {4:s})'.format(
-            ','.join(fields),
+            fields,
             tables[0],
             tables[1],
             '{0}.{1}'.format(tables[0], join_fields[0]),
             '{0}.{1}'.format(tables[1], join_fields[1]))
 
-        sql += self._where(where) + self._order(order) + self._limit(limit) + self._offset(offset)
+        order =self._order(order) 
+        limit = self._limit(limit) 
+        offset = self._offset(offset)
 
-        return self.execute(sql, where[1] if where and len(where) > 1 else None)
+        sql += f'{w_clause} {order} {limit} {offset}'
+        return sql
+
+    def _join(self, tables, fields, join_fields, where=None, order=None, limit=None, offset=None):
+        """Run an inner left join query"""
+        w_clause, w_values = self._where(where)
+        sql = self._join_sql(tables, fields, join_fields, w_clause, order, limit, offset)
+        return self.execute(sql, w_values)
 
     def __enter__(self):
         return self

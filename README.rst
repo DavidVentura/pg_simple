@@ -220,7 +220,7 @@ Dropping and creating tables
     db.create('books',
               '''
     "id" SERIAL NOT NULL,
-    "type" VARCHAR(20) NOT NULL,
+    "genre" VARCHAR(20) NOT NULL,
     "name" VARCHAR(40) NOT NULL,
     "price" MONEY NOT NULL,
     "published" DATE NOT NULL,
@@ -283,7 +283,7 @@ Inserting/updating/deleting rows with return value
 .. code:: python
 
     row = db.insert("books",
-                    {"type": "fiction",
+                    {"genre": "fiction",
                      "name": "Book with ID",
                      "price": 123.45,
                      "published": "1997-01-31"},
@@ -323,7 +323,7 @@ Fetching multiple records
     books = db.fetchall('books',
                         fields=['name AS n', 'genre AS g'],
                         where=('published BETWEEN %s AND %s', [datetime.date(2005, 2, 1), datetime.date(2009, 2, 1)]),
-                        order=['published', 'DESC'], 
+                        order=['published', pg_simple.Order.DESC], 
                         limit=5, 
                         offset=2)
 

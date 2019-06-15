@@ -1,172 +1,92 @@
 # -*- coding: utf-8 -*-
 
-__author__ = 'Masroor Ehsan'
-
-import unittest
-import threading
+import pytest
 import time
+import sqlparse
 
 import pg_simple
 
+INVALID_TOKENS = (sqlparse.tokens.Punctuation, sqlparse.tokens.Keyword, sqlparse.tokens.Whitespace, sqlparse.tokens.Comparison)
 
-TEST_DB_DSN = 'dbname=pg_simple user=masroor'
+@pytest.fixture(scope="session")
+def db():
+    pg_simple.PgSimple._connect = lambda x: 0
+    return pg_simple.PgSimple(pool=None)
 
+@pytest.mark.parametrize("data", [ {'key_1': 'value_1'}, {'key_1': 'value_1', 'key_2': 'value_2'}, ])
+def test_insert(db, data):
+    sql = db._insert('my_table', data).lower().strip()
 
-class AbstractPgSimpleTestCase(unittest.TestCase):
-    def __init__(self, *args, **kwargs):
-        super(AbstractPgSimpleTestCase, self).__init__(*args, **kwargs)
+    tokens = sqlparse.parse(sql)[0].flatten()
+    valid_tokens = [t for t in tokens if not t.ttype in INVALID_TOKENS]
 
-        # Kludge alert: We want this class to carry test cases without being run
-        # by the unit test framework, so the `run' method is overridden to do
-        # nothing.  But in order for sub-classes to be able to do something when
-        # run is invoked, the constructor will rebind `run' from TestCase.
-        if self.__class__ != AbstractPgSimpleTestCase:
-            # Rebind `run' from the parent class.
-            self.run = unittest.TestCase.run.__get__(self, self.__class__)
-        else:
-            self.run = lambda self, *args, **kwargs: None
+    assert valid_tokens.pop(0).value == 'insert'
+    assert valid_tokens.pop(0).value == 'my_table'
 
-    def setUp(self):
-        super(AbstractPgSimpleTestCase, self).setUp()
-        self.pool = pg_simple.config_pool(max_conn=25,
-                              expiration=5,
-                              pool_manager=self._get_pool_manager(),
-                              dsn=TEST_DB_DSN)
+    for key in data.keys():
+        assert valid_tokens.pop(0).value == key
 
-        self.tables = (('pg_t1', '''id SERIAL PRIMARY KEY,
-                                   name TEXT NOT NULL,
-                                   count INTEGER NOT NULL DEFAULT 0,
-                                   active BOOLEAN NOT NULL DEFAULT true'''),
-                       ('pg_t2', '''id SERIAL PRIMARY KEY,
-                                   value TEXT NOT NULL,
-                                   pg_t1_id INTEGER NOT NULL REFERENCES pg_t1(id)'''))
+    for value in data.values():
+        # properly tokenized
+        assert valid_tokens.pop(0).ttype == sqlparse.tokens.Name.Placeholder
+    assert len(valid_tokens) == 0
 
-    def _get_pool_manager(self):
-        raise NotImplementedError()
+@pytest.mark.parametrize("data", [
+    {'key_1': 'value_1'}, 
+    {'key_1': 'value_1', 'key_2': 'value_2'},
+    {'key_1': 'value_1', 'key_2': 'value_2'},
+    ])
+@pytest.mark.parametrize("where", [
+    ('condition = %s', ["77"]), 
+    ('condition = %s and condition2 = %s', ["77", "88"]),
+    ])
+def test_update(db, data, where):
+    sql = db._update('my_table', data=data, w_clause=where[0], returning=None)
 
-    def _drop_tables(self, db):
-        db.drop('pg_t1', True)
-        db.drop('pg_t2')
+    tokens = sqlparse.parse(sql)[0].flatten()
+    valid_tokens = [t for t in tokens if not t.ttype in INVALID_TOKENS]
+    assert valid_tokens.pop(0).value.lower() == 'update'
+    assert valid_tokens.pop(0).value == 'my_table'
 
-    def _truncate_tables(self, db):
-        db.truncate('pg_t2', restart_identity=True)
-        db.truncate('pg_t1', restart_identity=True, cascade=True)
+    for key in data.keys():
+        assert valid_tokens.pop(0).value == key
+        assert valid_tokens.pop(0).ttype == sqlparse.tokens.Name.Placeholder
 
-    def _populate_tables(self, db):
-        for i in range(26):
-            id_ = db.insert('pg_t1', {'name': chr(97 + i) * 5}, returning='id')
-            _ = db.insert('pg_t2', {'value': chr(97 + i) * 4, 'pg_t1_id': id_})
-
-    def _create_tables(self, db, fill=False):
-        for (name, schema) in self.tables:
-            db.create(name, schema)
-
-        if fill:
-            self._populate_tables(db)
-
-    def test_basic_functions(self):
-        import code
-        import doctest
-        import sys
-
-        db = pg_simple.PgSimple(self.pool)
-        if sys.argv.count('--interact'):
-            db.log = sys.stdout
-            code.interact(local=locals())
-        else:
-            try:
-                # Setup tables
-                self._drop_tables(db)
-                self._create_tables(db, fill=True)
-                # Run tests
-                doctest.testmod(optionflags=doctest.ELLIPSIS)
-            finally:
-                # Drop tables
-                self._drop_tables(db)
-        self.assertEqual(True, True)
-
-    def _check_table(self, db, table_name):
-        record = db.fetchone('pg_tables', fields=['tablename', ],
-                             where=('schemaname=%s AND tablename=%s', ['public', table_name]))
-        self.assertEqual(record is not None and record.tablename == table_name, True,
-                         'Table must exist, but was not found. Auto-commit fail.')
-
-    def test_connection_auto_commit(self):
-        import code
-        import sys
-
-        with pg_simple.PgSimple(self.pool) as db:
-            if sys.argv.count('--interact'):
-                db.log = sys.stdout
-                code.interact(local=locals())
-            else:
-                self._drop_tables(db)
-                self._create_tables(db, fill=True)
-
-        with pg_simple.PgSimple(self.pool) as db:
-            try:
-                self._check_table(db, 'pg_t1')
-            finally:
-                self._drop_tables(db)
+    if where:
+        condition, values = where
+        for value in values:
+            assert valid_tokens.pop(0).ttype == sqlparse.tokens.Name # how do I test condition/condition2
+            assert valid_tokens.pop(0).ttype == sqlparse.tokens.Name.Placeholder # properly tokenized
+    assert len(valid_tokens) == 0
 
 
-class PgSimpleTestCase(AbstractPgSimpleTestCase):
-    def _get_pool_manager(self):
-        return pg_simple.SimpleConnectionPool
+@pytest.mark.parametrize("tables,fields,join_fields", [
+    (('t1', 't2'), (('t1_f1', 't1_f2'), ('t2_f1', 't2_f2',)), ('t1_f2','t2_f1')),
+    ])
+def test_join(db, tables, fields, join_fields):
+    sql = db._join_sql(tables, fields, join_fields, '', None, None, None).lower().strip()
+    assert f'from {tables[0]} left join {tables[1]}' in sql
+    tokens = sqlparse.parse(sql)[0].flatten()
+    valid_tokens = [t for t in tokens if not t.ttype in INVALID_TOKENS]
 
+    assert valid_tokens.pop(0).value.lower() == 'select'
+    i = 0
+    # select t_k.f_j ...
+    for table in tables:
+        for field in fields[i]:
+            assert valid_tokens.pop(0).value == table # <Ti>.Fi
+            assert valid_tokens.pop(0).value == field # Ti.<Fi>
+        i+= 1
 
-class PgSimpleThread(threading.Thread):
-    def __init__(self, thread_id, name, counter, test_cls):
-        threading.Thread.__init__(self)
-        self.thread_id = thread_id
-        self.name = name
-        self.counter = counter
-        self.test_cls = test_cls
+    # from TABLE left join TABLEi
+    for table in tables:
+        assert valid_tokens.pop(0).value == table
 
-    def run(self):
-        print('Starting %s' % self.name)
-        self.database_operations()
-        print('Exiting %s' % self.name)
+    # on Ti.Fk = Tj.Fn
+    i = 0
+    for table in tables:
+        assert valid_tokens.pop(0).value == table # <Ti>.Fi
+        assert valid_tokens.pop(0).value == join_fields[i] # Ti.<Fi>
+        i+= 1
 
-    def database_operations(self):
-        with pg_simple.PgSimple(self.test_cls.pool) as db:
-            self.test_cls._check_table(db, 'pg_t1')
-            self.test_cls._truncate_tables(db)
-            self.test_cls._populate_tables(db)
-
-        time.sleep(1)
-
-
-class PgSimpleThreadedTestCase(AbstractPgSimpleTestCase):
-    def _get_pool_manager(self):
-        return pg_simple.ThreadedConnectionPool
-
-    def test_threaded_connections(self):
-        with pg_simple.PgSimple(self.pool) as db:
-            self._drop_tables(db)
-            self._create_tables(db, fill=True)
-
-        threads = []
-
-        # Create new threads
-        for i in range(20):
-            t = PgSimpleThread(i, 'thread-' + str(i), i, self)
-            threads.append(t)
-
-        # Start new Threads
-        for t in threads:
-            t.start()
-
-        # Wait for all threads to complete
-        for t in threads:
-            t.join()
-
-        # Drop tables
-        with pg_simple.PgSimple(self.pool) as db:
-            self._drop_tables(db)
-
-        print("Exiting Main Thread \n")
-
-
-if __name__ == '__main__':
-    unittest.main()
+    assert len(valid_tokens) == 0
