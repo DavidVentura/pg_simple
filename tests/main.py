@@ -3,33 +3,28 @@
 import pytest
 import time
 import sqlparse
+import hypothesis.strategies as s
+import string
+from hypothesis import given
 
 import pg_simple
 
 INVALID_TOKENS = (sqlparse.tokens.Punctuation, sqlparse.tokens.Keyword, sqlparse.tokens.Whitespace, sqlparse.tokens.Comparison)
+IDENTIFIER_CHARS = string.ascii_letters + string.digits + "_"
 
 @pytest.fixture(scope="session")
 def db():
     pg_simple.PgSimple._connect = lambda x: 0
     return pg_simple.PgSimple(pool=None)
 
-@pytest.mark.parametrize("fields", [
-    ['f1'],
-    ['f1', 'f2', 'f3'],
-    ])
-@pytest.mark.parametrize("where", [
-    ('', []), 
-    ('condition = %s', ["77"]), 
-    ('condition = %s and condition2 = %s', ["77", "88"]),
-    ('condition = %s and condition2 like %s', ["77", "88"]),
-    ])
-@pytest.mark.parametrize("order", [
-    None,
-    ['f1', pg_simple.Order.DESC],
-    ['f1', pg_simple.Order.ASC],
-    ])
-@pytest.mark.parametrize("limit", [None, 999])
-@pytest.mark.parametrize("offset", [None, 999])
+@given(where=s.sampled_from([('', []), ('condition = %s', ["77"]),
+       ('condition = %s and condition2 = %s', ["77", "88"]),
+       ('condition = %s and condition2 like %s', ["77", "88"]),
+       ]),
+       order=s.one_of(s.tuples(s.sampled_from(IDENTIFIER_CHARS), s.sampled_from(pg_simple.Order)), s.none()),
+       limit=s.one_of(s.integers(), s.none()),
+       offset=s.one_of(s.integers(), s.none()),
+       fields=s.lists(s.sampled_from(IDENTIFIER_CHARS), min_size=1))
 def test_select(db, fields, where, order, limit, offset):
     sql = db._select_sql('my_table', fields, where[0], order, limit, offset).lower().strip()
 
@@ -38,18 +33,20 @@ def test_select(db, fields, where, order, limit, offset):
 
     assert valid_tokens.pop(0).value == 'select'
     for f in fields:
-        assert valid_tokens.pop(0).value == f
+        assert valid_tokens.pop(0).value == f.lower()
 
     assert valid_tokens.pop(0).value == 'my_table'
 
     if where:
         condition, values = where
         for value in values:
-            assert valid_tokens.pop(0).ttype == sqlparse.tokens.Name # how do I test condition/condition2
-            assert valid_tokens.pop(0).ttype == sqlparse.tokens.Name.Placeholder # properly tokenized
+            identifier = valid_tokens.pop(0)
+            placeholder = valid_tokens.pop(0)
+            assert identifier.ttype == sqlparse.tokens.Name # how do I test condition/condition2?
+            assert placeholder.ttype == sqlparse.tokens.Name.Placeholder # properly tokenized
 
     if order:
-        assert valid_tokens.pop(0).value == order[0]
+        assert valid_tokens.pop(0).value == order[0].lower()
         assert valid_tokens.pop(0).value.lower() == order[1].value.lower()
 
     if limit:
@@ -60,7 +57,7 @@ def test_select(db, fields, where, order, limit, offset):
 
     assert len(valid_tokens) == 0
 
-@pytest.mark.parametrize("data", [ {'key_1': 'value_1'}, {'key_1': 'value_1', 'key_2': 'value_2'}, ])
+@given(s.dictionaries(s.sampled_from(IDENTIFIER_CHARS), s.sampled_from(IDENTIFIER_CHARS)))
 def test_insert(db, data):
     sql = db._insert('my_table', data).lower().strip()
 
@@ -71,24 +68,18 @@ def test_insert(db, data):
     assert valid_tokens.pop(0).value == 'my_table'
 
     for key in data.keys():
-        assert valid_tokens.pop(0).value == key
+        assert valid_tokens.pop(0).value == key.lower()
 
     for value in data.values():
         # properly tokenized
         assert valid_tokens.pop(0).ttype == sqlparse.tokens.Name.Placeholder
     assert len(valid_tokens) == 0
 
-@pytest.mark.parametrize("data", [
-    {'key_1': 'value_1'}, 
-    {'key_1': 'value_1', 'key_2': 'value_2'},
-    {'key_1': 'value_1', 'key_2': 'value_2'},
-    ])
-@pytest.mark.parametrize("where", [
-    ('', []), 
-    ('condition = %s', ["77"]), 
-    ('condition = %s and condition2 = %s', ["77", "88"]),
-    ('condition = %s and condition2 like %s', ["77", "88"]),
-    ])
+@given(data=s.dictionaries(s.sampled_from(IDENTIFIER_CHARS), s.sampled_from(IDENTIFIER_CHARS), min_size=1),
+       where=s.sampled_from([('', []), ('condition = %s', ["77"]),
+       ('condition = %s and condition2 = %s', ["77", "88"]),
+       ('condition = %s and condition2 like %s', ["77", "88"]),
+       ]))
 def test_update(db, data, where):
     sql = db._update('my_table', data=data, w_clause=where[0], returning=None)
 
